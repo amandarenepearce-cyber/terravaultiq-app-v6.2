@@ -1,9 +1,12 @@
 import io
+import json
+import os
 from datetime import datetime
 from typing import List
 
 import pandas as pd
 import streamlit as st
+from PIL import Image
 
 from modules.discovery import discover_businesses, search_public_topics, expand_topic_queries
 from modules.enrichment import enrich_rows
@@ -13,17 +16,30 @@ from modules import packager as packager_mod
 from modules import exports as exports_mod
 
 
-# -----------------------------
-# App setup
-# -----------------------------
+# -------------------------------------------------
+# Page config + favicon
+# -------------------------------------------------
+favicon_path = os.path.join("assets", "favicon.png")
+page_icon = "🧠"
+
+if os.path.exists(favicon_path):
+    try:
+        page_icon = Image.open(favicon_path)
+    except Exception:
+        page_icon = "🧠"
+
 st.set_page_config(
     page_title="TerraVaultIQ",
-    page_icon="🧠",
+    page_icon=page_icon,
     layout="wide",
 )
 
 inject_brand_theme()
 
+
+# -------------------------------------------------
+# Session state
+# -------------------------------------------------
 if "results_df" not in st.session_state:
     st.session_state.results_df = pd.DataFrame()
 
@@ -31,9 +47,9 @@ if "last_run_meta" not in st.session_state:
     st.session_state.last_run_meta = {}
 
 
-# -----------------------------
+# -------------------------------------------------
 # Safe helper bindings / fallbacks
-# -----------------------------
+# -------------------------------------------------
 def _fallback_normalize_zip_list(text: str) -> List[str]:
     if not text:
         return []
@@ -44,26 +60,43 @@ def _fallback_normalize_zip_list(text: str) -> List[str]:
 normalize_zip_list = getattr(packager_mod, "normalize_zip_list", _fallback_normalize_zip_list)
 build_client_export_df = getattr(packager_mod, "build_client_export_df", None)
 build_crm_export_df = getattr(packager_mod, "build_crm_export_df", None)
+build_package_manifest = getattr(packager_mod, "build_package_manifest", None)
+build_package_summary = getattr(packager_mod, "build_package_summary", None)
+
 build_package_zip_bytes = getattr(exports_mod, "build_package_zip_bytes", None)
 dataframe_to_excel_bytes = getattr(exports_mod, "dataframe_to_excel_bytes", None)
 
 
-# -----------------------------
-# Helpers
-# -----------------------------
+# -------------------------------------------------
+# UI helpers
+# -------------------------------------------------
 def render_hero():
     st.markdown(
         """
         <div class="tv-hero">
-            <div class="tv-pill">TerraVaultIQ • Lead Intelligence</div>
+            <div class="tv-pill">TerraVaultIQ • Audience Intelligence Solutions</div>
             <h1>
-                Build launch-ready<br>
-                <span class="accent">lead packages</span>
+                Build and activate<br>
+                <span class="accent">hyper-targeted<br>audiences</span>
             </h1>
             <p>
-                Discover, enrich, score, and package up to 1,000 leads with premium exports
-                built for internal teams, outreach workflows, Excel delivery, and Google Sheets-ready handoff.
+                Buy one tool or run the full platform. TerraVaultIQ helps teams build leads,
+                create audiences, target by geography, leverage lookback data, and generate
+                activation-ready outputs from one connected system.
             </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_header(title: str, subtitle: str = ""):
+    subtitle_html = f'<div class="tv-card-sub">{subtitle}</div>' if subtitle else ""
+    st.markdown(
+        f"""
+        <div class="tv-card">
+            <h2>{title}</h2>
+            {subtitle_html}
         </div>
         """,
         unsafe_allow_html=True,
@@ -99,27 +132,32 @@ def dedupe_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     work = work.drop_duplicates(
         subset=["_dedupe_name", "_dedupe_address", "_dedupe_website", "_dedupe_phone"],
         keep="first",
-    ).drop(columns=["_dedupe_name", "_dedupe_address", "_dedupe_website", "_dedupe_phone"])
+    )
+
+    work = work.drop(
+        columns=["_dedupe_name", "_dedupe_address", "_dedupe_website", "_dedupe_phone"],
+        errors="ignore",
+    )
 
     return work.reset_index(drop=True)
 
 
 def sort_by_score_if_present(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-    if "lead_score" not in df.columns:
+    if df.empty or "lead_score" not in df.columns:
         return df.reset_index(drop=True)
 
     work = df.copy()
     work["_lead_score_num"] = pd.to_numeric(work["lead_score"], errors="coerce").fillna(-1)
-    work = work.sort_values("_lead_score_num", ascending=False).drop(columns=["_lead_score_num"])
+    work = work.sort_values("_lead_score_num", ascending=False)
+    work = work.drop(columns=["_lead_score_num"], errors="ignore")
     return work.reset_index(drop=True)
 
 
 def safe_metric_count(df: pd.DataFrame, column: str) -> int:
     if column not in df.columns:
         return 0
-    return int(df[column].astype(str).str.strip().replace("nan", "").ne("").sum())
+    s = df[column].astype(str).fillna("").str.strip()
+    return int((s != "").sum())
 
 
 def high_score_count(df: pd.DataFrame) -> int:
@@ -135,7 +173,20 @@ def build_summary_text(
     search_mode: str,
     keyword: str,
     area_label: str,
-):
+) -> str:
+    if callable(build_package_summary):
+        try:
+            return build_package_summary(
+                package_name=package_name,
+                prepared_by=prepared_by,
+                row_count=len(df),
+                search_mode=search_mode,
+                keyword=keyword,
+                area_label=area_label,
+            )
+        except Exception:
+            pass
+
     lines = [
         f"Package: {package_name}",
         f"Prepared by: {prepared_by}",
@@ -199,7 +250,11 @@ def fallback_crm_export_df(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame()
     out["name"] = df["name"] if "name" in df.columns else ""
     out["primary_email"] = df["primary_email"] if "primary_email" in df.columns else ""
-    out["primary_phone"] = df["primary_phone"] if "primary_phone" in df.columns else (df["phone"] if "phone" in df.columns else "")
+    out["primary_phone"] = (
+        df["primary_phone"]
+        if "primary_phone" in df.columns
+        else (df["phone"] if "phone" in df.columns else "")
+    )
     out["website"] = df["website"] if "website" in df.columns else ""
     out["status"] = "new"
     out["priority"] = df["priority"] if "priority" in df.columns else ""
@@ -245,13 +300,43 @@ def get_excel_bytes(df: pd.DataFrame) -> bytes:
     return dataframe_to_excel_fallback(df)
 
 
+def build_manifest(package_name: str, prepared_by: str, row_count: int, meta: dict) -> dict:
+    if callable(build_package_manifest):
+        try:
+            return build_package_manifest(
+                package_name=package_name,
+                prepared_by=prepared_by,
+                row_count=row_count,
+                search_mode=meta.get("search_mode", ""),
+                keyword=meta.get("keyword", ""),
+                area_label=meta.get("area_label", ""),
+            )
+        except Exception:
+            pass
+
+    return {
+        "package_name": package_name,
+        "prepared_by": prepared_by,
+        "generated_at": datetime.now().isoformat(),
+        "total_rows": int(row_count),
+        "search_mode": meta.get("search_mode", ""),
+        "keyword": meta.get("keyword", ""),
+        "area_label": meta.get("area_label", ""),
+        "exports": [
+            "client_leads.csv",
+            "crm_import.csv",
+            "package_summary.txt",
+            "manifest.json",
+        ],
+    }
+
+
 def build_package_zip_fallback(
     client_df: pd.DataFrame,
     crm_df: pd.DataFrame,
     summary_text: str,
     manifest: dict,
 ) -> bytes:
-    import json
     import zipfile
 
     buf = io.BytesIO()
@@ -279,7 +364,7 @@ def get_package_zip_bytes(
 
 
 def render_results_card(df: pd.DataFrame, title: str = "Lead Results"):
-    st.markdown(f'<div class="tv-card"><h2>{title}</h2>', unsafe_allow_html=True)
+    render_section_header(title, "Review, score, and export client-ready lead packages.")
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total Results", len(df))
@@ -288,12 +373,11 @@ def render_results_card(df: pd.DataFrame, title: str = "Lead Results"):
     m4.metric("High Score", high_score_count(df))
 
     st.dataframe(df, use_container_width=True, hide_index=True, height=520)
-    st.markdown("</div>", unsafe_allow_html=True)
 
 
-# -----------------------------
+# -------------------------------------------------
 # Hero
-# -----------------------------
+# -------------------------------------------------
 render_hero()
 
 tab1, tab2, tab3 = st.tabs(
@@ -301,32 +385,39 @@ tab1, tab2, tab3 = st.tabs(
 )
 
 
-# -----------------------------
-# TAB 1: SEARCH
-# -----------------------------
+# -------------------------------------------------
+# TAB 1: CAMPAIGN SEARCH
+# -------------------------------------------------
 with tab1:
-    left_col, right_col = st.columns([2.1, 1], gap="large")
+    left_col, right_col = st.columns([2.15, 1], gap="large")
 
     with left_col:
-        st.markdown('<div class="tv-card"><h2>Location & Keywords</h2>', unsafe_allow_html=True)
+        render_section_header(
+            "Location & Keywords",
+            "Set the search area, vertical, and campaign discovery inputs.",
+        )
 
         scan_mode = st.radio(
             "Scan Mode",
             ["Single ZIP Deep Scan", "Multi-ZIP Area Scan"],
             index=1,
             horizontal=True,
-            key="scan_mode_main_left",
+            key="scan_mode_main",
         )
 
         if scan_mode == "Single ZIP Deep Scan":
-            zip_code = st.text_input("ZIP CODE", value="60614")
+            zip_code = st.text_input("ZIP CODE", value="66048")
             zip_list_text = ""
         else:
             zip_code = ""
-            zip_list_text = st.text_area("ZIP LIST", value="60614, 60610, 60657, 60618", height=140)
+            zip_list_text = st.text_area(
+                "ZIP LIST",
+                value="66048, 66044, 66086",
+                height=120,
+            )
 
-        radius = st.number_input("RADIUS (miles)", min_value=1, max_value=100, value=25, step=1)
-        area_label = st.text_input("CITY / AREA LABEL", value="Chicago IL")
+        radius = st.number_input("RADIUS (miles)", min_value=1, max_value=100, value=10, step=1)
+        area_label = st.text_input("CITY / AREA LABEL", value="Leavenworth")
 
         search_mode = st.selectbox(
             "Search Mode",
@@ -343,7 +434,11 @@ with tab1:
         label, default_value = default_prompt(search_mode)
         category_or_topic = st.text_input(label, value=default_value)
 
-        if search_mode in ["Public Intent Search", "Relocation Interest Finder", "Community Interest Finder"]:
+        if search_mode in [
+            "Public Intent Search",
+            "Relocation Interest Finder",
+            "Community Interest Finder",
+        ]:
             with st.expander("Suggested public search phrases"):
                 for phrase in expand_topic_queries(
                     search_mode,
@@ -354,23 +449,23 @@ with tab1:
                     st.code(phrase, language=None)
 
         run_search = st.button("FIND LEADS", use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
 
     with right_col:
-        st.markdown('<div class="tv-card"><h2>Search Options</h2>', unsafe_allow_html=True)
+        render_section_header(
+            "Search Options",
+            "Control enrichment, scoring, fallback search, and final export limits.",
+        )
 
         use_google = st.checkbox("Use Google API if available", value=True)
-        use_osm = st.checkbox("Use OpenStreetMap backup", value=True)
+        use_osm = st.checkbox("Use OpenStreetMap backup", value=False)
         do_enrich = st.checkbox("Find public business contact info", value=True)
-        enrich_limit = st.number_input("Max rows to enrich", min_value=0, max_value=5000, value=1000, step=50)
+        enrich_limit = st.number_input("Max rows to enrich", min_value=0, max_value=5000, value=250, step=50)
         do_score = st.checkbox("Score business leads", value=True)
         trim_results = st.checkbox("Trim final results", value=True)
         final_cap = st.selectbox("Final result cap", [100, 250, 500, 1000], index=3)
 
         public_pages_only = st.checkbox("Public pages only", value=True)
         max_pages = st.slider("Public search pages", 1, 5, 2)
-
-        st.markdown("</div>", unsafe_allow_html=True)
 
     if run_search:
         try:
@@ -389,7 +484,7 @@ with tab1:
                     st.error("Please enter at least one ZIP code for business searches.")
                 else:
                     mode = "marketing" if search_mode == "Marketing Prospect Finder" else "custom"
-                    prog = st.progress(0, text="Searching businesses...")
+                    progress = st.progress(0, text="Searching businesses...")
 
                     for idx, z in enumerate(zips):
                         rows = discover_businesses(
@@ -408,9 +503,12 @@ with tab1:
                             row["area_label"] = area_label.strip()
 
                         all_rows.extend(rows)
-                        prog.progress((idx + 1) / len(zips), text=f"Business search {idx + 1}/{len(zips)}")
+                        progress.progress(
+                            (idx + 1) / len(zips),
+                            text=f"Business search {idx + 1}/{len(zips)}",
+                        )
 
-                    prog.empty()
+                    progress.empty()
 
                     if do_enrich and all_rows:
                         limit = min(len(all_rows), int(enrich_limit))
@@ -424,7 +522,7 @@ with tab1:
 
             else:
                 target_zips = zips if zips else [""]
-                prog = st.progress(0, text="Searching public pages...")
+                progress = st.progress(0, text="Searching public pages...")
 
                 for idx, z in enumerate(target_zips):
                     rows = search_public_topics(
@@ -444,9 +542,12 @@ with tab1:
                         row["area_label"] = area_label.strip()
 
                     all_rows.extend(rows)
-                    prog.progress((idx + 1) / len(target_zips), text=f"Public search {idx + 1}/{len(target_zips)}")
+                    progress.progress(
+                        (idx + 1) / len(target_zips),
+                        text=f"Public search {idx + 1}/{len(target_zips)}",
+                    )
 
-                prog.empty()
+                progress.empty()
 
             if not all_rows:
                 st.warning("No results found.")
@@ -496,22 +597,24 @@ with tab1:
             st.error(f"Error: {e}")
 
 
-# -----------------------------
-# TAB 2: PACKAGE BUILDER
-# -----------------------------
+# -------------------------------------------------
+# TAB 2: CLIENT PACKAGE BUILDER
+# -------------------------------------------------
 with tab2:
-    st.markdown('<div class="tv-card"><h2>Build a Client Package</h2>', unsafe_allow_html=True)
+    render_section_header(
+        "Build a Client Package",
+        "Turn current results into client-ready CSV, Excel, CRM, and ZIP exports.",
+    )
 
     if st.session_state.results_df.empty:
         st.info("Run a search first in the Campaign Search tab.")
-        st.markdown("</div>", unsafe_allow_html=True)
     else:
         df = sort_by_score_if_present(st.session_state.results_df.copy())
         meta = st.session_state.last_run_meta or {}
 
         c1, c2, c3 = st.columns(3)
         with c1:
-            package_name = st.text_input("Package Name", value="Chicago Roofing Leads")
+            package_name = st.text_input("Package Name", value="Leavenworth Roofing Leads")
         with c2:
             prepared_by = st.text_input("Prepared By", value="Amanda")
         with c3:
@@ -536,21 +639,12 @@ with tab2:
             area_label=meta.get("area_label", ""),
         )
 
-        manifest = {
-            "package_name": package_name,
-            "prepared_by": prepared_by,
-            "generated_at": datetime.now().isoformat(),
-            "total_rows": int(len(package_df)),
-            "search_mode": meta.get("search_mode", ""),
-            "keyword": meta.get("keyword", ""),
-            "area_label": meta.get("area_label", ""),
-            "exports": [
-                "client_leads.csv",
-                "crm_import.csv",
-                "package_summary.txt",
-                "manifest.json",
-            ],
-        }
+        manifest = build_manifest(
+            package_name=package_name,
+            prepared_by=prepared_by,
+            row_count=len(package_df),
+            meta=meta,
+        )
 
         st.text_area("Package Summary", value=summary_text, height=220)
         render_results_card(package_df, title="Package Preview")
@@ -594,15 +688,19 @@ with tab2:
                 use_container_width=True,
             )
 
-        st.caption("Google Sheets-ready path: download CSV and import into Sheets, or upload the Excel file to Drive and open in Sheets.")
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.caption(
+            "Google Sheets-ready path: download CSV and import into Sheets, or upload the Excel file to Drive and open in Sheets."
+        )
 
 
-# -----------------------------
+# -------------------------------------------------
 # TAB 3: EXPANSION PLANNER
-# -----------------------------
+# -------------------------------------------------
 with tab3:
-    st.markdown('<div class="tv-card"><h2>Expansion Planner</h2>', unsafe_allow_html=True)
+    render_section_header(
+        "Expansion Planner",
+        "Generate public-intent and market-interest phrases to expand discovery coverage.",
+    )
 
     planner_mode = st.selectbox(
         "Planner Mode",
@@ -614,8 +712,8 @@ with tab3:
         index=0,
     )
     planner_topic = st.text_input("Main Keyword", value="need a roofer")
-    planner_zip = st.text_input("ZIP", value="60614")
-    planner_area = st.text_input("Area Label", value="Chicago IL")
+    planner_zip = st.text_input("ZIP", value="66048")
+    planner_area = st.text_input("Area Label", value="Leavenworth")
 
     phrases = expand_topic_queries(
         planner_mode,
@@ -624,12 +722,13 @@ with tab3:
         planner_area.strip(),
     )
 
-    st.markdown('<div class="tv-card"><h2>Suggested Search Phrases</h2>', unsafe_allow_html=True)
+    render_section_header(
+        "Suggested Search Phrases",
+        "Use these to widen discovery without lowering relevance too aggressively.",
+    )
+
     for phrase in phrases:
         st.code(phrase, language=None)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("</div>", unsafe_allow_html=True)
 
 
 st.markdown("---")
