@@ -16,9 +16,9 @@ from modules import packager as packager_mod
 from modules import exports as exports_mod
 
 
-# -------------------------------------------------
-# Page config + favicon
-# -------------------------------------------------
+# =========================================================
+# PAGE SETUP
+# =========================================================
 favicon_path = os.path.join("assets", "favicon.png")
 page_icon = "🧠"
 
@@ -36,10 +36,6 @@ st.set_page_config(
 
 inject_brand_theme()
 
-
-# -------------------------------------------------
-# Session state
-# -------------------------------------------------
 if "results_df" not in st.session_state:
     st.session_state.results_df = pd.DataFrame()
 
@@ -47,9 +43,9 @@ if "last_run_meta" not in st.session_state:
     st.session_state.last_run_meta = {}
 
 
-# -------------------------------------------------
-# Safe helper bindings / fallbacks
-# -------------------------------------------------
+# =========================================================
+# SAFE FALLBACKS
+# =========================================================
 def _fallback_normalize_zip_list(text: str) -> List[str]:
     if not text:
         return []
@@ -67,9 +63,9 @@ build_package_zip_bytes = getattr(exports_mod, "build_package_zip_bytes", None)
 dataframe_to_excel_bytes = getattr(exports_mod, "dataframe_to_excel_bytes", None)
 
 
-# -------------------------------------------------
-# UI helpers
-# -------------------------------------------------
+# =========================================================
+# UI HELPERS
+# =========================================================
 def render_hero():
     st.markdown(
         """
@@ -106,7 +102,7 @@ def render_section_header(title: str, subtitle: str = ""):
 def default_prompt(search_mode: str):
     defaults = {
         "Marketing Prospect Finder": ("INDUSTRY / CATEGORY", "roofing"),
-        "Custom Business Search": ("CATEGORY / KEYWORD", "home cleaning"),
+        "Custom Business Search": ("CATEGORY / KEYWORD", "landscape lighting"),
         "Public Intent Search": ("TOPIC / KEYWORD", "need a roofer"),
         "Relocation Interest Finder": ("TARGET AREA", "moving to chicago"),
         "Community Interest Finder": ("COMMUNITY / INTEREST", "small business owners"),
@@ -375,9 +371,9 @@ def render_results_card(df: pd.DataFrame, title: str = "Lead Results"):
     st.dataframe(df, use_container_width=True, hide_index=True, height=520)
 
 
-# -------------------------------------------------
-# Hero
-# -------------------------------------------------
+# =========================================================
+# HERO
+# =========================================================
 render_hero()
 
 tab1, tab2, tab3 = st.tabs(
@@ -385,9 +381,9 @@ tab1, tab2, tab3 = st.tabs(
 )
 
 
-# -------------------------------------------------
+# =========================================================
 # TAB 1: CAMPAIGN SEARCH
-# -------------------------------------------------
+# =========================================================
 with tab1:
     left_col, right_col = st.columns([2.15, 1], gap="large")
 
@@ -453,7 +449,7 @@ with tab1:
     with right_col:
         render_section_header(
             "Search Options",
-            "Control enrichment, scoring, fallback search, and final export limits.",
+            "Control enrichment, scoring, fallback search, and export-ready limits.",
         )
 
         use_google = st.checkbox("Use Google API if available", value=True)
@@ -597,9 +593,9 @@ with tab1:
             st.error(f"Error: {e}")
 
 
-# -------------------------------------------------
+# =========================================================
 # TAB 2: CLIENT PACKAGE BUILDER
-# -------------------------------------------------
+# =========================================================
 with tab2:
     render_section_header(
         "Build a Client Package",
@@ -693,9 +689,9 @@ with tab2:
         )
 
 
-# -------------------------------------------------
+# =========================================================
 # TAB 3: EXPANSION PLANNER
-# -------------------------------------------------
+# =========================================================
 with tab3:
     render_section_header(
         "Expansion Planner",
