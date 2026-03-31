@@ -102,7 +102,7 @@ def render_section_header(title: str, subtitle: str = ""):
 def default_prompt(search_mode: str):
     defaults = {
         "Marketing Prospect Finder": ("INDUSTRY / CATEGORY", "roofing"),
-        "Custom Business Search": ("CATEGORY / KEYWORD", "landscape lighting"),
+        "Custom Business Search": ("CATEGORY / KEYWORD", "house cleaners"),
         "Public Intent Search": ("TOPIC / KEYWORD", "need a roofer"),
         "Relocation Interest Finder": ("TARGET AREA", "moving to chicago"),
         "Community Interest Finder": ("COMMUNITY / INTEREST", "small business owners"),
@@ -449,7 +449,14 @@ with tab1:
     with right_col:
         render_section_header(
             "Search Options",
-            "Control enrichment, scoring, fallback search, and export-ready limits.",
+            "Paste your Google key here, then run discovery.",
+        )
+
+        st.text_input(
+            "Google API Key",
+            type="password",
+            key="google_api_key",
+            help="Paste your Google API key here for this session.",
         )
 
         use_google = st.checkbox("Use Google API if available", value=True)
@@ -489,7 +496,7 @@ with tab1:
                             mode,
                             category_or_topic.strip(),
                             use_google,
-                            use_osm or not use_google,
+                            use_osm,
                         )
 
                         for row in rows:
@@ -546,7 +553,7 @@ with tab1:
                 progress.empty()
 
             if not all_rows:
-                st.warning("No results found.")
+                st.warning("No results found. Check your Google API key and try a broader category like roofing.")
             else:
                 df = pd.DataFrame(all_rows)
                 df = dedupe_dataframe(df)
